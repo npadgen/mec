@@ -6,6 +6,8 @@ import getopt
 import time
 import sys
 import json
+import csv
+from io import StringIO
 
 import tabulate
 
@@ -44,7 +46,9 @@ def main():
             'month=',
             'year=',
             'show-month',
-            'json']
+            'json',
+            'csv',
+            ]
     try:
         opts, args = getopt.getopt(sys.argv[1:], '', args)
     except getopt.GetoptError:
@@ -55,6 +59,7 @@ def main():
     hourly = True
     totals = False
     use_json = False
+    use_csv = False
 
     today = time.localtime()
     day = Day(today.tm_year, today.tm_mon, today.tm_mday)
@@ -75,6 +80,8 @@ def main():
             show_month = True
         elif opt == '--json':
             use_json = True
+        elif opt == '--csv':
+            use_csv = True
 
     config = run_zappi.load_config(debug=False)
 
@@ -82,6 +89,7 @@ def main():
     server_conn.refresh()
 
     jout = {}
+    csvout = []
 
     # The Zappi V2.
     for zappi in server_conn.state.zappi_list():
@@ -89,19 +97,76 @@ def main():
         show_headers = True
 
         if use_json:
-            (header, _, totals) = load_day(server_conn,
-                                           zappi.sno,
-                                           day,
-                                           True,
-                                           True,
-                                           True)
-            raw = {}
-            for head in header:
-                if not totals[0] or head == 'Time':
-                    totals.pop(0)
-                    continue
-                raw[head] = totals.pop(0)
-            jout[zappi.sno] = raw
+            if show_month:
+                all_data = []
+                raw = {}
+                for dom in range(1, int(day.tm_mday) + 1):
+                    day.tm_mday = dom
+                    (header, _, totals) = load_day(server_conn,
+                                                   zappi.sno,
+                                                   day,
+                                                   True,
+                                                   True,
+                                                   True)
+                    all_data.append(totals)
+                    for head in header:
+                        if not totals[0] or head == 'Time':
+                            totals.pop(0)
+                            continue
+                        raw.setdefault(head, 0)
+                        raw[head] += float(totals.pop(0).replace("kWh", ""))
+                for field in raw:
+                    raw[field] = f"{raw[field]:.3f}kWh"
+                jout[zappi.sno] = raw
+            else:
+                (header, _, totals) = load_day(server_conn,
+                                            zappi.sno,
+                                            day,
+                                            True,
+                                            True,
+                                            True)
+                raw = {}
+                for head in header:
+                    if not totals[0] or head == 'Time':
+                        totals.pop(0)
+                        continue
+                    raw[head] = totals.pop(0)
+                jout[zappi.sno] = raw
+
+        elif use_csv:
+            if show_month:
+                all_data = []
+                for dom in range(1, int(day.tm_mday) + 1):
+                    raw = {}
+                    day.tm_mday = dom
+                    raw["Day"] = dom
+                    (header, _, totals) = load_day(server_conn,
+                                                   zappi.sno,
+                                                   day,
+                                                   True,
+                                                   True,
+                                                   True)
+                    all_data.append(totals)
+                    for head in header:
+                        if not totals[0] or head == 'Time':
+                            totals.pop(0)
+                            continue
+                        raw[head] = float(totals.pop(0).replace("kWh", ""))
+                    csvout.append(raw)
+            else:
+                (header, _, totals) = load_day(server_conn,
+                                            zappi.sno,
+                                            day,
+                                            True,
+                                            True,
+                                            True)
+                raw = {}
+                for head in header:
+                    if not totals[0] or head == 'Time':
+                        totals.pop(0)
+                        continue
+                    raw[head] = float(totals.pop(0).replace("kWh", ""))
+                csvout.append(raw)
 
         elif show_month:
             all_data = []
@@ -121,7 +186,13 @@ def main():
 
     if use_json:
         print(json.dumps(jout, indent=4, sort_keys=True))
-
+    elif use_csv:
+        f = StringIO()
+        writer = csv.DictWriter(f, fieldnames=csvout[0].keys())
+        writer.writeheader()
+        for row in csvout:
+            writer.writerow(row)
+        print(f.getvalue())
 
 def load_day(server_conn, zid, day, hourly, totals, use_json):
 
